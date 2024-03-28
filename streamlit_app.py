@@ -1,63 +1,55 @@
+import folium
 import streamlit as st
+from streamlit_folium import st_folium
 import pandas as pd
 import math
 from pathlib import Path
+import geopandas as gpd
+from pyproj import Transformer
+
+
 
 # Set the title and favicon that appear in the Browser's tab bar.
 st.set_page_config(
-    page_title='GDP Dashboard',
+    page_title='Misregistration between 2D and 3D Dashboard',
     page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
 )
 
 # -----------------------------------------------------------------------------
 # Declare some useful functions.
+# Read your CSV data
+STSW_1 = pd.read_csv("/workspaces/os-gp/data/STSW_1_Data.csv")
+STSW_2 = pd.read_csv("/workspaces/os-gp/data/STSW_2_Data.csv")
+STNE_2 = pd.read_csv("/workspaces/os-gp/data/STNE_2_Data.csv")
 
+# Set SHAPE_RESTORE_SHX config option
+#gpd.io.file.fiona.drvsupport.supported_drivers['ESRI Shapefile'] = 'rw'
+#gpd.io.file.fiona.drvsupport.supported_drivers['SHP'] = 'rw'
+#gpd.io.file.fiona.drvsupport.supported_drivers['SHAPEFILE'] = 'rw'
+
+# Read the shapefile
+shapefile_path_tiles = "/workspaces/os-gp/Shapefiles/Shapefile/Standard_southwest_mesh_tiles/Standard_southwest_mesh_tiles.shp"
+gdf_tiles = gpd.read_file(shapefile_path_tiles)
+
+shapefile_path_centre = "/workspaces/os-gp/Shapefiles/Shapefile/central_meridian/central_meridian.shp"
+gdf_centre = gpd.read_file(shapefile_path_centre)
+
+shapefile_path_county = "/workspaces/os-gp/Shapefiles/Shapefile/county_boundaries/county_boundaries.shp"
+gdf_county = gpd.read_file(shapefile_path_county)
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def convert_to_web_mercator(row):
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+    # Define the transformer from OSGB36 to Web Mercator
+    transformer = Transformer.from_crs("EPSG:27700", "EPSG:4326")
+    easting, northing = transformer.transform(row['3D_Easting'], row['3D_Northing'])
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    return northing, easting  # Return in lat/lon format for Folium
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+STSW_1['longitude'], STSW_1['latitude'] = zip(*STSW_1.apply(convert_to_web_mercator, axis=1))
+STSW_2['longitude'], STSW_2['latitude'] = zip(*STSW_2.apply(convert_to_web_mercator, axis=1))
+STNE_2['longitude'], STNE_2['latitude'] = zip(*STNE_2.apply(convert_to_web_mercator, axis=1))
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
 
 # -----------------------------------------------------------------------------
 # Draw the actual page
@@ -74,6 +66,34 @@ But it's otherwise a great (and did I mention _free_?) source of data.
 # Add some spacing
 ''
 ''
+
+
+
+# center on Liberty Bell, add marker
+map_center = [STSW_1['latitude'].mean(), STSW_1['longitude'].mean()]
+mymap = folium.Map(location=map_center, zoom_start=10)
+# Add markers for each coordinate from CSV data
+for _, row in STSW_1.iterrows():
+    folium.CircleMarker(location=[row['latitude'], row['longitude']], popup='STSW_1', radius=1, color='red', fill=True, fill_color='red').add_to(mymap)
+for _, row in STSW_2.iterrows():
+    folium.CircleMarker(location=[row['latitude'], row['longitude']], popup='STSW_2', radius=1, color='red', fill=True, fill_color='red').add_to(mymap)
+for _, row in STNE_2.iterrows():
+    folium.CircleMarker(location=[row['latitude'], row['longitude']], popup='STNE_2', radius=1, color='red', fill=True, fill_color='red').add_to(mymap)
+
+# Add the shapefiles to the map as layers
+folium.GeoJson(gdf_tiles, name='Tiles', tooltip='Tiles').add_to(mymap)
+folium.GeoJson(gdf_centre, name='Central Meridian', style_function=lambda x: {'color': 'black', 'fillOpacity': 0.5}, tooltip='Central Meridian').add_to(mymap)
+folium.GeoJson(gdf_county, name='County Boundaries', style_function=lambda x: {'color': 'orange', 'fillOpacity': 0.5}, tooltip='County Boundaries').add_to(mymap)
+
+# Add layer control
+folium.LayerControl().add_to(mymap)
+
+# Display the map
+mymap
+
+# call to render Folium map in Streamlit
+st_data = st_folium(m, width=725)
+
 
 min_value = gdp_df['Year'].min()
 max_value = gdp_df['Year'].max()
